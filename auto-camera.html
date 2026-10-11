@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Auto Camera</title>
+<style>
+  body{margin:0;font-family:system-ui,sans-serif;background:#111;color:#eee}
+  .wrap{max-width:720px;margin:auto;padding:12px}
+  .stage{position:relative;width:100%;background:#000;border-radius:12px;overflow:hidden}
+  video,canvas#overlay{width:100%;display:block}
+  canvas#overlay{position:absolute;inset:0;height:100%}
+  .row{display:flex;gap:8px;flex-wrap:wrap;margin:10px 0;align-items:center}
+  select,button,input{padding:8px;border-radius:8px;border:0;font-size:16px}
+  button{background:#3b82f6;color:#fff}
+  #status{font-size:14px;opacity:.8}
+  #gallery{display:grid;grid-template-columns:repeat(auto-fill,minmax(110px,1fr));gap:6px}
+  #gallery img{width:100%;border-radius:8px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="stage">
+    <video id="video" playsinline muted autoplay></video>
+    <canvas id="overlay"></canvas>
+  </div>
+  <div class="row">
+    <button id="start">Start camera</button>
+    <select id="target">
+      <option>car</option><option>person</option><option>dog</option><option>cat</option>
+      <option>bicycle</option><option>motorcycle</option><option>bus</option><option>truck</option>
+      <option>cell phone</option><option>bottle</option><option>laptop</option>
+    </select>
+  </div>
+  <div class="row">
+    <label>Min confidence <input id="conf" type="number" min="0.3" max="0.95" step="0.05" value="0.6" style="width:70px"></label>
+    <label>Cooldown (s) <input id="cool" type="number" min="1" max="60" value="3" style="width:60px"></label>
+  </div>
+  <div id="status">Idle.</div>
+  <h3>Captures</h3>
+  <div id="gallery"></div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.22.0/dist/tf.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd@2.2.3/dist/coco-ssd.min.js"></script>
+<script>
+const $ = id => document.getElementById(id);
+const video = $('video'), overlay = $('overlay'), ctx = overlay.getContext('2d');
+let model, lastShot = 0, running = false;
+
+$('start').onclick = async () => {
+  try {
+    $('status').textContent = 'Loading model...';
+    model = model || await cocoSsd.load();
+    const stream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: 'environment' }, audio: false
+    });
+    video.srcObject = stream;
+    await video.play();
+    overlay.width = video.videoWidth; overlay.height = video.videoHeight;
+    running = true;
+    loop();
+  } catch (e) {
+    $('status').textContent = 'Error: ' + e.message + ' (needs HTTPS or localhost + camera permission)';
+  }
+};
+
+async function loop() {
+  if (!running) return;
+  const preds = await model.detect(video);
+  ctx.clearRect(0, 0, overlay.width, overlay.height);
+  const target = $('target').value, minConf = +$('conf').value;
+  let hit = null;
+  for (const p of preds) {
+    const match = p.class === target && p.score >= minConf;
+    ctx.strokeStyle = match ? '#22c55e' : '#888';
+    ctx.lineWidth = 3;
+    ctx.strokeRect(...p.bbox);
+    ctx.fillStyle = ctx.strokeStyle;
+    ctx.font = '18px sans-serif';
+    ctx.fillText(`${p.class} ${(p.score*100|0)}%`, p.bbox[0] + 4, p.bbox[1] + 20);
+    if (match) hit = p;
+  }
+  const now = Date.now();
+  if (hit && now - lastShot > $('cool').value * 1000) {
+    lastShot = now;
+    capture(target);
+  }
+  $('status').textContent = hit ? `Seeing ${target}` : `Looking for ${target}...`;
+  requestAnimationFrame(loop);
+}
+
+function capture(label) {
+  const c = document.createElement('canvas');
+  c.width = video.videoWidth; c.height = video.videoHeight;
+  c.getContext('2d').drawImage(video, 0, 0);  // clean frame, no boxes
+  const url = c.toDataURL('image/jpeg', 0.9);
+  const a = document.createElement('a');
+  a.href = url; a.download = `${label}-${Date.now()}.jpg`;
+  const img = new Image(); img.src = url;
+  a.appendChild(img);
+  $('gallery').prepend(a);
+}
+</script>
+</body>
+</html>
